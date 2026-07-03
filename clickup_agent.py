@@ -163,7 +163,8 @@ class ClickUpAgent:
         self.page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
         time.sleep(3)
         
-        is_authorized = "/login" not in self.page.url
+        # Многофакторная проверка авторизации
+        is_authorized = self._check_authorization()
         
         if is_authorized:
             # Авторизован - скрываем браузер
@@ -194,6 +195,31 @@ class ClickUpAgent:
         
         console.print("[green]✅ Браузер готов (полностью скрытый)[/green]")
     
+    def _check_authorization(self):
+        """Надёжная проверка авторизации через несколько факторов"""
+        try:
+            # 1. Проверяем URL
+            if "/login" in self.page.url:
+                return False
+            
+            # 2. Проверяем наличие поля ввода (Quill editor)
+            input_field = self.page.query_selector('.ql-editor[contenteditable="true"]')
+            if input_field:
+                return True
+            
+            # 3. Проверяем наличие UI элементов ClickUp
+            sidebar = self.page.query_selector('[data-test="sidebar"]')
+            if sidebar:
+                return True
+            
+            # 4. Ждём немного и проверяем снова
+            time.sleep(2)
+            input_field = self.page.query_selector('.ql-editor[contenteditable="true"]')
+            return input_field is not None
+            
+        except Exception:
+            return False
+    
     def _hide_browser_window(self):
         """Скрывает окно браузера через PowerShell"""
         try:
@@ -221,10 +247,17 @@ Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -
     
     def close_browser(self):
         """Закрывает браузер"""
-        if self.ctx:
-            self.ctx.close()
-        if self.playwright:
-            self.playwright.stop()
+        try:
+            if self.ctx:
+                self.ctx.close()
+                self.ctx = None
+            if self.playwright:
+                self.playwright.stop()
+                self.playwright = None
+        except Exception as e:
+            # Игнорируем ошибки при двойном закрытии
+            if "already closed" not in str(e).lower() and "already stopped" not in str(e).lower():
+                raise
     
     def open_chat(self, conversation_id=None):
         """Открывает чат"""
