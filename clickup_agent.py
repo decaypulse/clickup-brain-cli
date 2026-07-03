@@ -563,13 +563,52 @@ Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -
     def extract_response(self):
         """Извлекает последний ответ Brain"""
         import re
-        body = self.page.evaluate('() => document.body.innerText')
+        
+        # Пробуем несколько способов получить текст
+        body = None
+        
+        # Способ 1: innerText
+        try:
+            body = self.page.evaluate('() => document.body.innerText')
+        except Exception as e:
+            console.print(f"[dim]⚠ innerText failed: {e}[/dim]")
+        
+        # Способ 2: textContent если innerText не сработал
+        if not body or len(body) < 50:
+            try:
+                body = self.page.evaluate('() => document.body.textContent')
+            except Exception as e:
+                console.print(f"[dim]⚠ textContent failed: {e}[/dim]")
+        
+        # Способ 3: найти конкретные контейнеры ответов
+        if not body or len(body) < 50:
+            try:
+                body = self.page.evaluate("""() => {
+                    const containers = document.querySelectorAll('[data-test="message"], .message, [class*="response"], [class*="answer"]');
+                    let texts = [];
+                    containers.forEach(c => {
+                        if (c.innerText) texts.push(c.innerText);
+                    });
+                    return texts.join('\\n---\\n');
+                }""")
+            except Exception as e:
+                console.print(f"[dim]⚠ containers failed: {e}[/dim]")
+        
         if not body:
+            console.print("[dim]⚠ Body is empty/null[/dim]")
+            # Сохраняем скриншот для отладки
+            try:
+                debug_path = f"debug_empty_response_{int(time.time())}.png"
+                self.page.screenshot(path=debug_path)
+                console.print(f"[dim]📸 Скриншот: {debug_path}[/dim]")
+            except:
+                pass
             return ""
         
         if 'Rate limit reached' in body:
             return "⚠️ Rate limit! Подожди и попробуй снова."
         
+        # Ищем ответы Brain (может быть несколько форматов)
         parts = re.split(r'\nBrain\n', body)
         if len(parts) >= 2:
             last = parts[-1].strip()
@@ -582,7 +621,24 @@ Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -
             for prefix in ["Working\n", "Reasoning\n", "Thinking\n", "Pondering\n"]:
                 if last.startswith(prefix):
                     last = last[len(prefix):].strip()
-            return last
+            if last:
+                return last
+        
+        # Fallback: пробуем найти последний большой блок текста
+        lines = body.split('\n')
+        text_blocks = []
+        current_block = []
+        for line in lines:
+            if len(line.strip()) > 0:
+                current_block.append(line)
+            else:
+                if len(current_block) > 2:
+                    text_blocks.append('\n'.join(current_block))
+                current_block = []
+        
+        if text_blocks:
+            return text_blocks[-1][:500]  # Последние 500 символов
+        
         return ""
     
     def send_message(self, text: str, timeout=120) -> str:
