@@ -166,8 +166,24 @@ class ClickUpAgent:
         is_authorized = self._check_authorization()
         
         if is_authorized:
-            # Сохраняем реальный URL workspace
+            # Получаем реальный URL workspace
             self._update_brain_url()
+            
+            # Переходим к AI Brain
+            console.print("[dim]🧠 Переход к AI Brain...[/dim]")
+            if not self._navigate_to_brain():
+                # Если через UI не получилось — идём напрямую
+                console.print("[dim]⚠ Навигация через UI не удалась, иду напрямую[/dim]")
+                self.page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+                time.sleep(3)
+            
+            # Ждём загрузку страницы Brain
+            try:
+                self.page.wait_for_selector('textarea, [contenteditable="true"]', timeout=10000)
+                console.print("[dim]✓ Страница Brain загружена[/dim]")
+            except:
+                console.print("[dim]⚠ Страница Brain загружается...[/dim]")
+            
             console.print("[green]✅ Авторизация сохранена, браузер в headless режиме[/green]")
             console.print("[green]✅ Браузер готов[/green]")
             return
@@ -212,9 +228,24 @@ class ClickUpAgent:
                 
                 if self._check_authorization():
                     console.print("[green]✅ Авторизация успешна! Скрываю браузер...[/green]")
-                    # Сохраняем реальный URL workspace
+                    # Получаем реальный URL workspace
                     self._update_brain_url()
                     time.sleep(1)
+                    
+                    # Переходим к AI Brain
+                    console.print("[dim]🧠 Переход к AI Brain...[/dim]")
+                    if not self._navigate_to_brain():
+                        console.print("[dim]⚠ Навигация через UI не удалась, иду напрямую[/dim]")
+                        self.page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+                        time.sleep(3)
+                    
+                    # Ждём загрузку страницы Brain
+                    try:
+                        self.page.wait_for_selector('textarea, [contenteditable="true"]', timeout=10000)
+                        console.print("[dim]✓ Страница Brain загружена[/dim]")
+                    except:
+                        console.print("[dim]⚠ Страница Brain загружается...[/dim]")
+                    
                     self._hide_browser_window()
                     console.print("[green]✅ Браузер скрыт, продолжаю работу[/green]")
                     return
