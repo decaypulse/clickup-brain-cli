@@ -136,11 +136,11 @@ class ClickUpAgent:
         self.ctx = None
         self.playwright = None
     
-    def init_browser(self, interactive=False):
-        """Инициализирует браузер с умной логикой авторизации
+    def init_browser(self):
+        """Инициализирует браузер — автоматическая логика видимости.
         
-        Args:
-            interactive: True = сразу показать браузер, False = headless, но если нет auth — авто-откроет видимый
+        Если авторизован → headless (невидимый).
+        Если нет → видимый браузер по центру экрана, ждём авторизации.
         """
         console.print("[dim]🔗 Инициализация браузера...[/dim]")
         self.playwright = sync_playwright().start()
@@ -166,7 +166,6 @@ class ClickUpAgent:
         is_authorized = self._check_authorization()
         
         if is_authorized:
-            # Авторизован — headless работает, всё ок
             console.print("[green]✅ Авторизация сохранена, браузер в headless режиме[/green]")
             console.print("[green]✅ Браузер готов[/green]")
             return
@@ -199,9 +198,17 @@ class ClickUpAgent:
         try:
             self.page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
             
+            console.print("[dim]Ожидание авторизации (каждые 3 сек проверяю)...[/dim]")
             start = time.time()
+            check_count = 0
             while time.time() - start < 300:  # 5 минут
-                time.sleep(2)
+                time.sleep(3)
+                check_count += 1
+                
+                # Отладка каждые 5 проверок
+                if check_count % 5 == 0:
+                    console.print(f"[dim]Проверка #{check_count}: URL = {self.page.url[:80]}[/dim]")
+                
                 if self._check_authorization():
                     console.print("[green]✅ Авторизация успешна! Скрываю браузер...[/green]")
                     time.sleep(1)
@@ -218,26 +225,51 @@ class ClickUpAgent:
     def _check_authorization(self):
         """Надёжная проверка авторизации через несколько факторов"""
         try:
-            # 1. Проверяем URL
-            if "/login" in self.page.url:
+            # Обновляем страницу чтобы получить актуальный URL
+            current_url = self.page.url
+            
+            # 1. Проверяем URL (если содержит /login - не авторизован)
+            if "/login" in current_url or "login" in current_url.lower():
                 return False
             
-            # 2. Проверяем наличие поля ввода (Quill editor)
+            # 2. Проверяем наличие аватара пользователя (сильный сигнал)
+            avatar = self.page.query_selector('[data-test="user-avatar"], .user-avatar, [class*="avatar"]')
+            if avatar:
+                console.print("[dim]✓ Найден аватар пользователя[/dim]")
+                return True
+            
+            # 3. Проверяем наличие поля ввода (Quill editor)
             input_field = self.page.query_selector('.ql-editor[contenteditable="true"]')
             if input_field:
+                console.print("[dim]✓ Найдено поле ввода[/dim]")
                 return True
             
-            # 3. Проверяем наличие UI элементов ClickUp
-            sidebar = self.page.query_selector('[data-test="sidebar"]')
+            # 4. Проверяем наличие UI элементов ClickUp (sidebar, workspace)
+            sidebar = self.page.query_selector('[data-test="sidebar"], .sidebar, [class*="sidebar"]')
             if sidebar:
+                console.print("[dim]✓ Найден sidebar[/dim]")
                 return True
             
-            # 4. Ждём немного и проверяем снова
-            time.sleep(2)
-            input_field = self.page.query_selector('.ql-editor[contenteditable="true"]')
-            return input_field is not None
+            # 5. Проверяем наличие кнопок/workspace элементов
+            workspace = self.page.query_selector('[data-test*="workspace"], [class*="workspace"]')
+            if workspace:
+                console.print("[dim]✓ Найден workspace[/dim]")
+                return True
             
-        except Exception:
+            # 6. Проверяем текст на странице (ищем "Sign in" или "Log in")
+            page_text = self.page.evaluate('() => document.body.innerText')
+            if "Sign in" in page_text or "Log in" in page_text or "Sign up" in page_text:
+                return False
+            
+            # 7. Если URL изменился и не содержит login - вероятно авторизован
+            if "app.clickup.com" in current_url and "login" not in current_url.lower():
+                console.print(f"[dim]✓ URL изменился: {current_url}[/dim]")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            console.print(f"[dim]⚠ Ошибка проверки: {e}[/dim]")
             return False
     
     def _center_browser_window(self):
@@ -552,85 +584,219 @@ Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -
             mcp_url: URL MCP сервера (если None, использует дефолтный из serveo)
         """
         if not mcp_url:
-            # Дефолтный URL из serveo туннеля
             mcp_url = "https://4e46efbf263a6207-185-176-158-3.serveousercontent.com/sse"
         
         console.print(f"\n[cyan]🔧 Настройка MCP сервера...[/cyan]")
         console.print(f"[dim]URL: {mcp_url}[/dim]\n")
         
         try:
-            # 1. Переходим на страницу APPS
-            console.print("[dim]1. Открываю APPS...[/dim]")
-            # Ищем кнопку APPS в боковой панели
-            apps_btn = self.page.query_selector('button:has-text("APPS"), [data-test="apps-button"]')
-            if apps_btn:
-                apps_btn.click()
-                time.sleep(2)
-            else:
-                console.print("[yellow]⚠️ Кнопка APPS не найдена, пробую через URL[/yellow]")
-                self.page.goto(f"{BASE_URL}/apps", wait_until="domcontentloaded", timeout=60000)
-                time.sleep(2)
+            # 1. Переходим в главный интерфейс ClickUp
+            console.print("[dim]1. Открываю главный интерфейс ClickUp...[/dim]")
+            self.page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+            time.sleep(3)
             
-            # 2. Кликаем на MCP Servers
-            console.print("[dim]2. Открываю MCP Servers...[/dim]")
-            mcp_servers = self.page.query_selector('text=MCP Servers, [data-test="mcp-servers"]')
-            if mcp_servers:
-                mcp_servers.click()
-                time.sleep(2)
-            else:
-                console.print("[yellow]⚠️ Кнопка MCP Servers не найдена[/yellow]")
+            # 2. Ищем и кликаем на APPS в боковой панели
+            console.print("[dim]2. Ищу раздел APPS...[/dim]")
+            
+            apps_selectors = [
+                'text=APPS',
+                'button:has-text("APPS")',
+                '[data-test*="apps" i]',
+                'a:has-text("APPS")',
+                '.apps-link',
+                'nav >> text=APPS'
+            ]
+            
+            apps_found = False
+            for selector in apps_selectors:
+                try:
+                    element = self.page.query_selector(selector)
+                    if element and element.is_visible():
+                        element.click()
+                        time.sleep(2)
+                        apps_found = True
+                        console.print(f"[dim]✓ Кликнул на APPS: {selector}[/dim]")
+                        break
+                except:
+                    continue
+            
+            if not apps_found:
+                console.print("[yellow]⚠️ Раздел APPS не найден, делаю скриншот...[/yellow]")
+                self._save_debug_screenshot("debug_apps_section.png")
+                console.print("[yellow]💡 Попробуй настроить вручную: APPS → MCP Servers → ADD Custom MCP Server[/yellow]")
                 return False
             
-            # 3. Кликаем на ADD Custom MCP Server
-            console.print("[dim]3. Добавляю Custom MCP Server...[/dim]")
-            add_btn = self.page.query_selector('button:has-text("ADD Custom MCP Server"), [data-test="add-mcp-server"]')
-            if add_btn:
-                add_btn.click()
-                time.sleep(2)
-            else:
-                console.print("[yellow]⚠️ Кнопка ADD не найдена[/yellow]")
+            # 3. Ищем раздел MCP Servers
+            console.print("[dim]3. Ищу раздел MCP Servers...[/dim]")
+            time.sleep(2)
+            
+            mcp_selectors = [
+                'text=MCP Servers',
+                'text=MCP',
+                '[data-test*="mcp" i]',
+                'a[href*="mcp" i]',
+                'button:has-text("MCP")',
+                '.mcp-servers',
+                'text=Model Context Protocol'
+            ]
+            
+            mcp_found = False
+            for selector in mcp_selectors:
+                try:
+                    element = self.page.query_selector(selector)
+                    if element and element.is_visible():
+                        element.click()
+                        time.sleep(2)
+                        mcp_found = True
+                        console.print(f"[dim]✓ Нашёл MCP раздел: {selector}[/dim]")
+                        break
+                except:
+                    continue
+            
+            if not mcp_found:
+                console.print("[yellow]⚠️ Раздел MCP не найден, делаю скриншот...[/yellow]")
+                self._save_debug_screenshot("debug_mcp_section.png")
+                console.print("[yellow]💡 Попробуй настроить вручную: APPS → MCP Servers → ADD Custom MCP Server[/yellow]")
                 return False
             
-            # 4. Кликаем Next (первый раз)
-            console.print("[dim]4. Заполняю форму...[/dim]")
-            next_btn = self.page.query_selector('button:has-text("Next"), [data-test="next-button"]')
-            if next_btn:
-                next_btn.click()
-                time.sleep(1)
+            # 4. Кликаем ADD Custom MCP Server
+            console.print("[dim]4. Добавляю Custom MCP Server...[/dim]")
+            add_selectors = [
+                'button:has-text("Add Custom MCP Server")',
+                'button:has-text("ADD Custom MCP Server")',
+                'button:has-text("Add MCP")',
+                '[data-test*="add-mcp" i]',
+                'button:has-text("Add Server")'
+            ]
             
-            # 5. Заполняем поля
+            add_found = False
+            for selector in add_selectors:
+                try:
+                    btn = self.page.query_selector(selector)
+                    if btn and btn.is_visible():
+                        btn.click()
+                        time.sleep(2)
+                        add_found = True
+                        console.print("[dim]✓ Кликнул на Add[/dim]")
+                        break
+                except:
+                    continue
+            
+            if not add_found:
+                console.print("[yellow]⚠️ Кнопка Add не найдена[/yellow]")
+                self._save_debug_screenshot("debug_add_mcp.png")
+                return False
+            
+            # 5. Кликаем Next (если есть)
+            console.print("[dim]5. Заполняю форму...[/dim]")
+            time.sleep(1)
+            
+            try:
+                next_btn = self.page.query_selector('button:has-text("Next"), button:has-text("Continue")')
+                if next_btn and next_btn.is_visible():
+                    next_btn.click()
+                    time.sleep(1)
+            except:
+                pass
+            
+            # 6. Заполняем поля
+            fields_filled = 0
+            
             # Name
-            name_field = self.page.query_selector('input[name="name"], input[placeholder*="name" i]')
-            if name_field:
-                name_field.fill("Hermes MCP Server")
+            name_selectors = [
+                'input[name="name"]',
+                'input[placeholder*="name" i]',
+                'input[placeholder*="Name" i]',
+                '#name',
+                'input[type="text"]'
+            ]
+            for selector in name_selectors:
+                try:
+                    field = self.page.query_selector(selector)
+                    if field and field.is_visible():
+                        field.fill("Hermes MCP Server")
+                        fields_filled += 1
+                        console.print("[dim]✓ Заполнил Name[/dim]")
+                        break
+                except:
+                    continue
             
-            # Description
-            desc_field = self.page.query_selector('textarea[name="description"], input[name="description"]')
-            if desc_field:
-                desc_field.fill("Provides filesystem access to user files")
+            # Description (может быть необязательным)
+            desc_selectors = [
+                'textarea[name="description"]',
+                'input[name="description"]',
+                'textarea[placeholder*="description" i]',
+                '#description'
+            ]
+            for selector in desc_selectors:
+                try:
+                    field = self.page.query_selector(selector)
+                    if field and field.is_visible():
+                        field.fill("Provides filesystem access to user files")
+                        console.print("[dim]✓ Заполнил Description[/dim]")
+                        break
+                except:
+                    continue
             
             # URL
-            url_field = self.page.query_selector('input[name="url"], input[placeholder*="url" i], input[type="url"]')
-            if url_field:
-                url_field.fill(mcp_url)
+            url_selectors = [
+                'input[name="url"]',
+                'input[placeholder*="url" i]',
+                'input[placeholder*="URL" i]',
+                'input[type="url"]',
+                '#url'
+            ]
+            for selector in url_selectors:
+                try:
+                    field = self.page.query_selector(selector)
+                    if field and field.is_visible():
+                        field.fill(mcp_url)
+                        fields_filled += 1
+                        console.print("[dim]✓ Заполнил URL[/dim]")
+                        break
+                except:
+                    continue
             
-            # 6. Кликаем Next (второй раз)
-            console.print("[dim]5. Подтверждаю настройки...[/dim]")
-            next_btn = self.page.query_selector('button:has-text("Next"), [data-test="next-button"]')
-            if next_btn:
-                next_btn.click()
-                time.sleep(2)
+            if fields_filled < 2:
+                console.print("[yellow]⚠️ Не удалось заполнить все поля[/yellow]")
+                self._save_debug_screenshot("debug_mcp_form.png")
             
-            # 7. Кликаем Finish/Done
-            finish_btn = self.page.query_selector('button:has-text("Finish"), button:has-text("Done"), [data-test="finish-button"]')
-            if finish_btn:
-                finish_btn.click()
-                time.sleep(2)
+            # 7. Кликаем Next/Continue (если есть)
+            console.print("[dim]6. Подтверждаю настройки...[/dim]")
+            time.sleep(1)
             
-            console.print("[green]✅ MCP сервер добавлен![/green]\n")
+            for selector in ['button:has-text("Next")', 'button:has-text("Continue")', 'button:has-text("Save")']:
+                try:
+                    btn = self.page.query_selector(selector)
+                    if btn and btn.is_visible():
+                        btn.click()
+                        time.sleep(2)
+                        break
+                except:
+                    continue
             
-            # 8. Возвращаемся в чат и отправляем сообщение
-            console.print("[dim]6. Отправляю сообщение в чат...[/dim]")
+            # 8. Кликаем Finish/Done/Add
+            finish_selectors = [
+                'button:has-text("Finish")',
+                'button:has-text("Done")',
+                'button:has-text("Add")',
+                'button:has-text("Save")',
+                'button[type="submit"]'
+            ]
+            
+            for selector in finish_selectors:
+                try:
+                    btn = self.page.query_selector(selector)
+                    if btn and btn.is_visible():
+                        btn.click()
+                        time.sleep(2)
+                        console.print("[green]✅ MCP сервер добавлен![/green]\n")
+                        break
+                except:
+                    continue
+            
+            # 9. Возвращаемся в чат и отправляем сообщение
+            console.print("[dim]7. Отправляю сообщение в чат...[/dim]")
             self.open_chat()
             
             message = f"Я подключил Custom MCP по ссылке {mcp_url} Теперь работаем только через этот MCP в моих папках"
@@ -642,15 +808,24 @@ Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -
                 inp.press("Enter")
                 time.sleep(3)
                 console.print("[green]✅ Сообщение отправлено![/green]\n")
+                return True
             else:
                 console.print("[yellow]⚠️ Не удалось найти поле ввода[/yellow]")
-            
-            return True
+                return False
             
         except Exception as e:
             console.print(f"[red]❌ Ошибка настройки MCP: {e}[/red]")
-            console.print("[yellow]Попробуй настроить вручную через сайт[/yellow]")
+            self._save_debug_screenshot("debug_mcp_error.png")
+            console.print("[yellow]💡 Попробуй настроить вручную: APPS → MCP Servers → ADD Custom MCP Server[/yellow]")
             return False
+    
+    def _save_debug_screenshot(self, filename):
+        """Сохраняет скриншот для дебага"""
+        try:
+            self.page.screenshot(path=filename)
+            console.print(f"[dim]📸 Скриншот сохранён: {filename}[/dim]")
+        except Exception as e:
+            console.print(f"[dim]⚠️ Не удалось сделать скриншот: {e}[/dim]")
 
 
 def show_help():
