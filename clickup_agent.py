@@ -1113,8 +1113,8 @@ def main():
     agent = ClickUpAgent()
     
     try:
-        # Инициализация с умной логикой авторизации
-        agent.init_browser(interactive=args.interactive)
+        # Инициализация с автоматической логикой авторизации
+        agent.init_browser()
         
         # Открываем чат (если ещё не открыт в init_browser)
         if "/login" not in agent.page.url:
