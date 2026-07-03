@@ -137,21 +137,25 @@ class ClickUpAgent:
         self.playwright = None
     
     def init_browser(self):
-        """Инициализирует headless браузер"""
+        """Инициализирует минимизированный браузер (почти невидимый)"""
         if not PROFILE_DIR.exists():
             console.print("[red]❌ browser_profile не найден! Запусти clickup_capture.py[/red]")
             sys.exit(1)
         
-        console.print("[dim]🔗 Инициализация браузера (headless)...[/dim]")
+        console.print("[dim]🔗 Инициализация браузера (минимизированный)...[/dim]")
         self.playwright = sync_playwright().start()
         self.ctx = self.playwright.chromium.launch_persistent_context(
             str(PROFILE_DIR),
-            headless=True,  # НЕВИДИМЫЙ браузер!
+            headless=False,  # Видимый, но минимизированный
             viewport={"width": 1400, "height": 900},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            args=[
+                '--start-minimized',
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox'
+            ]
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
-        console.print("[green]✅ Браузер инициализирован (невидимый)[/green]")
+        console.print("[green]✅ Браузер инициализирован (минимизированный)[/green]")
     
     def close_browser(self):
         """Закрывает браузер"""
@@ -168,6 +172,21 @@ class ClickUpAgent:
         
         if "/login" in self.page.url:
             return False
+        
+        # Диагностика: проверяем что страница загрузилась
+        try:
+            title = self.page.title()
+            console.print(f"[dim]Страница: {title}[/dim]")
+            
+            # Проверяем наличие поля ввода
+            inp = self.find_input()
+            if not inp:
+                console.print("[yellow]⚠️ Поле ввода не найдено, делаю скриншот...[/yellow]")
+                self.page.screenshot(path="debug_headless.png")
+                console.print("[dim]Скриншот сохранён: debug_headless.png[/dim]")
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Ошибка диагностики: {e}[/yellow]")
+        
         return True
     
     def find_input(self):
