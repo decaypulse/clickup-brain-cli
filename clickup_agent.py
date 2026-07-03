@@ -968,8 +968,7 @@ def show_command_suggestions(current_input, commands):
 
 
 def custom_input(prompt_text='❯ '):
-    """Кастомный input с автозаполнением команд — запускается в отдельном потоке
-    чтобы избежать конфликта event loop с Playwright sync API"""
+    """Кастомный input с вертикальным автодополнением команд через prompt_toolkit"""
     import threading
     
     result = [None]
@@ -982,21 +981,54 @@ def custom_input(prompt_text='❯ '):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            from prompt_toolkit.completion import WordCompleter
+            from prompt_toolkit.completion import Completer, Completion
+            from prompt_toolkit.formatted_text import HTML
             
             commands = [
-                '/help', '/newsession', '/new', '/sessions', '/ls', '/load',
-                '/history', '/h', '/clear', '/c', '/logout', '/swap',
-                '/setupmcp', '/exit', '/quit', '/q'
+                ('/help', 'Показать справку'),
+                ('/newsession', 'Новая сессия'),
+                ('/new', 'Новая сессия (короткая)'),
+                ('/sessions', 'Список сессий'),
+                ('/ls', 'Список сессий (короткая)'),
+                ('/load', 'Загрузить сессию'),
+                ('/history', 'История сообщений'),
+                ('/h', 'История (короткая)'),
+                ('/clear', 'Очистить экран'),
+                ('/c', 'Очистить (короткая)'),
+                ('/logout', 'Выйти из аккаунта'),
+                ('/swap', 'Сменить аккаунт'),
+                ('/setupmcp', 'Настроить MCP'),
+                ('/exit', 'Выход'),
+                ('/quit', 'Выход'),
+                ('/q', 'Выход (короткая)')
             ]
             
-            completer = WordCompleter(commands, sentence=True)
+            class CommandCompleter(Completer):
+                """Комплетер для команд с вертикальным отображением"""
+                
+                def get_completions(self, document, complete_event):
+                    text = document.text_before_cursor
+                    
+                    # Показываем все команды при вводе /
+                    if text.startswith('/'):
+                        for cmd, desc in commands:
+                            if cmd.startswith(text.lower()):
+                                # Вертикальное отображение: команда + описание
+                                display = HTML(f"<b>{cmd:<15}</b> <dim>{desc}</dim>")
+                                yield Completion(
+                                    cmd,
+                                    start_position=-len(text),
+                                    display=display
+                                )
+            
+            completer = CommandCompleter()
             history = FileHistory(str(HISTORY_FILE))
             
             session = PromptSession(
                 completer=completer,
                 history=history,
-                auto_suggest=AutoSuggestFromHistory()
+                auto_suggest=AutoSuggestFromHistory(),
+                complete_while_typing=True
             )
             
             result[0] = session.prompt(prompt_text)
@@ -1017,77 +1049,93 @@ def custom_input(prompt_text='❯ '):
 
 
 def interactive_session_select(agent):
-    """Интерактивный выбор сессии с навигацией стрелками"""
+    """Интерактивный выбор сессии через prompt_toolkit со стрелками"""
+    import threading
+    
     sessions = agent.db.list_sessions()
     if not sessions:
         console.print("[yellow]Нет сохранённых сессий[/yellow]")
         return None
     
-    selected_idx = 0
-    visible_count = min(10, len(sessions))  # Показываем максимум 10 сессий
+    result = [None]
+    error = [None]
     
-    # Скрываем курсор
-    print('\033[25l', end='', flush=True)
-    
-    try:
-        while True:
-            # Очищаем экран (сохраняя позицию)
-            print('\033[H\033[2J', end='', flush=True)
+    def _run_prompt():
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             
-            # Заголовок
-            console.print("\n[bold cyan]📚 Сессии[/bold cyan]")
-            console.print("[dim]Используй ↑↓ для навигации, Enter для выбора, Esc для отмены[/dim]\n")
+            from prompt_toolkit.completion import Completer, Completion
+            from prompt_toolkit.document import Document
+            from prompt_toolkit.formatted_text import HTML
+            from prompt_toolkit.shortcuts import prompt
             
-            # Отображаем сессии
-            start_idx = max(0, selected_idx - visible_count // 2)
-            end_idx = min(len(sessions), start_idx + visible_count)
-            
-            if start_idx > 0:
-                print("  ↑ ...")
-            
-            for i in range(start_idx, end_idx):
-                s = sessions[i]
-                updated = s['updated_at'].split('T')[0]
+            class SessionCompleter(Completer):
+                """Комплетер для сессий с отображением списка"""
                 
-                if i == selected_idx:
-                    # Выделенная сессия
-                    print(f"  \033[36m▶ {s['title']:<30} | {s['id']:<8} | {updated}\033[0m")
-                else:
-                    print(f"    {s['title']:<30} | {s['id']:<8} | {updated}")
+                def get_completions(self, document, complete_event):
+                    for i, s in enumerate(sessions):
+                        updated = s['updated_at'].split('T')[0]
+                        display = f"{s['title']} | {s['id']} | {updated}"
+                        yield Completion(
+                            s['id'],
+                            start_position=-len(document.text),
+                            display=HTML(f"▶ <b>{display}</b>") if True else display,
+                            display_meta=f"Обновлена: {updated}"
+                        )
             
-            if end_idx < len(sessions):
-                print("  ↓ ...")
+            completer = SessionCompleter()
             
-            print()
+            # Показываем список сессий перед вводом
+            console.print("\n[bold cyan]📚 Сессии[/bold cyan]")
+            console.print("[dim]Выбери сессию стрелками ↑↓ или введи номер/ID:[/dim]\n")
             
-            # Читаем клавишу
-            import msvcrt
-            key = msvcrt.getch()
+            for i, s in enumerate(sessions):
+                updated = s['updated_at'].split('T')[0]
+                console.print(f"  [{i+1}] {s['title']:<30} | {s['id']:<8} | {updated}")
             
-            if key == b'\xe0':  # Специальная клавиша (стрелки)
-                key2 = msvcrt.getch()
-                if key2 == b'H':  # Стрелка вверх
-                    selected_idx = max(0, selected_idx - 1)
-                elif key2 == b'P':  # Стрелка вниз
-                    selected_idx = min(len(sessions) - 1, selected_idx + 1)
-            elif key == b'\r' or key == b'\n':  # Enter
-                # Показываем курсор
-                print('\033[25h', end='', flush=True)
-                console.print(f"\n[green]✅ Выбрана сессия: {sessions[selected_idx]['title']}[/green]\n")
-                return sessions[selected_idx]['id']
-            elif key == b'\x1b':  # Esc
-                # Показываем курсор
-                print('\033[25h', end='', flush=True)
-                console.print("\n[dim]Отменено[/dim]\n")
-                return None
-            elif key == b'\x03':  # Ctrl+C
-                print('\033[25h', end='', flush=True)
-                raise KeyboardInterrupt
+            console.print()
+            
+            user_input = prompt(
+                'Выбери сессию: ',
+                completer=completer,
+                complete_while_typing=True
+            )
+            
+            # Проверяем если ввели номер
+            try:
+                idx = int(user_input) - 1
+                if 0 <= idx < len(sessions):
+                    result[0] = sessions[idx]['id']
+                    return
+            except (ValueError, TypeError):
+                pass
+            
+            # Проверяем если ввели ID
+            for s in sessions:
+                if user_input and (s['id'].startswith(user_input) or user_input == s['id']):
+                    result[0] = s['id']
+                    return
+            
+            loop.close()
+        except Exception as e:
+            error[0] = e
     
-    except KeyboardInterrupt:
-        print('\033[25h', end='', flush=True)
-        console.print("\n[dim]Отменено[/dim]\n")
-        return None
+    t = threading.Thread(target=_run_prompt)
+    t.start()
+    t.join()
+    
+    if error[0]:
+        if isinstance(error[0], KeyboardInterrupt):
+            console.print("\n[dim]Отменено[/dim]\n")
+            return None
+        raise error[0]
+    
+    if result[0]:
+        console.print(f"\n[green]✅ Выбрана сессия[/green]\n")
+    
+    return result[0]
 
 
 def main():
