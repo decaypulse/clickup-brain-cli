@@ -140,15 +140,15 @@ class ClickUpAgent:
         """Инициализирует браузер с умной логикой авторизации
         
         Args:
-            interactive: True = показать браузер для авторизации, False = headless (полностью невидимый)
+            interactive: True = сразу показать браузер, False = headless, но если нет auth — авто-откроет видимый
         """
         console.print("[dim]🔗 Инициализация браузера...[/dim]")
         self.playwright = sync_playwright().start()
         
-        # Используем persistent context для сохранения авторизации
+        # Пробуем headless сначала (быстрее, невидимо)
         self.ctx = self.playwright.chromium.launch_persistent_context(
             str(PROFILE_DIR),
-            headless=not interactive,  # headless=True когда не интерактивный режим
+            headless=True,
             viewport={"width": 1400, "height": 900},
             args=[
                 '--disable-blink-features=AutomationControlled',
@@ -166,38 +166,54 @@ class ClickUpAgent:
         is_authorized = self._check_authorization()
         
         if is_authorized:
-            # Авторизован
-            if not interactive:
-                console.print("[green]✅ Авторизация сохранена, браузер в headless режиме[/green]")
-            else:
-                console.print("[green]✅ Авторизация сохранена[/green]")
-        else:
-            # Не авторизован
-            if interactive:
-                console.print("[yellow]⚠️ Требуется авторизация[/yellow]")
-                console.print("[dim]Браузер открыт. Войди в аккаунт ClickUp.[/dim]")
-                console.print("[dim]После авторизации браузер автоматически закроется.[/dim]")
-                
-                # Ждём пока пользователь авторизуется
-                try:
-                    self.page.wait_for_url(lambda url: "/login" not in url, timeout=300000)  # 5 минут
-                    console.print("[green]✅ Авторизация успешна![/green]")
-                    console.print("[dim]Сохраняю сессию...[/dim]")
-                    time.sleep(2)
-                    # Закрываем браузер чтобы пользователь перезапустил в обычном режиме
-                    self.close_browser()
-                    console.print("[green]✅ Готово! Теперь запусти без --interactive[/green]")
-                    sys.exit(0)
-                except:
-                    console.print("[red]❌ Таймаут авторизации[/red]")
-                    self.close_browser()
-                    sys.exit(1)
-            else:
-                console.print("[red]❌ Требуется авторизация! Запусти: python clickup_agent.py --interactive[/red]")
-                self.close_browser()
-                sys.exit(1)
+            # Авторизован — headless работает, всё ок
+            console.print("[green]✅ Авторизация сохранена, браузер в headless режиме[/green]")
+            console.print("[green]✅ Браузер готов[/green]")
+            return
         
-        console.print("[green]✅ Браузер готов[/green]")
+        # НЕ авторизован — закрываем headless и открываем видимый браузер
+        console.print("[yellow]⚠️ Требуется авторизация — открываю браузер...[/yellow]")
+        self.close_browser()
+        
+        # Запускаем видимый браузер по центру экрана
+        self.playwright = sync_playwright().start()
+        self.ctx = self.playwright.chromium.launch_persistent_context(
+            str(PROFILE_DIR),
+            headless=False,
+            viewport={"width": 1400, "height": 900},
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--window-position=260,90'  # Примерно по центру для 1920x1080
+            ]
+        )
+        self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+        
+        # Центрируем окно через PowerShell/Win32
+        self._center_browser_window()
+        
+        console.print("[dim]Браузер открыт по центру экрана. Войди в аккаунт ClickUp.[/dim]")
+        console.print("[dim]После авторизации браузер автоматически скроется.[/dim]")
+        
+        # Ждём пока пользователь авторизуется (до 5 минут)
+        try:
+            self.page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+            
+            start = time.time()
+            while time.time() - start < 300:  # 5 минут
+                time.sleep(2)
+                if self._check_authorization():
+                    console.print("[green]✅ Авторизация успешна! Скрываю браузер...[/green]")
+                    time.sleep(1)
+                    self._hide_browser_window()
+                    console.print("[green]✅ Браузер скрыт, продолжаю работу[/green]")
+                    return
+        except Exception as e:
+            console.print(f"[red]❌ Ошибка: {e}[/red]")
+        
+        console.print("[red]❌ Таймаут авторизации![/red]")
+        self.close_browser()
+        sys.exit(1)
     
     def _check_authorization(self):
         """Надёжная проверка авторизации через несколько факторов"""
@@ -223,6 +239,47 @@ class ClickUpAgent:
             
         except Exception:
             return False
+    
+    def _center_browser_window(self):
+        """Центрирует окно браузера на экране через PowerShell"""
+        try:
+            import subprocess
+            time.sleep(1)
+            
+            ps_script = '''
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32Center {
+    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int x, int y, int w, int h, bool repaint);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
+}
+"@
+
+# Получаем размер экрана
+$screenW = [Win32Center]::GetSystemMetrics(0)
+$screenH = [Win32Center]::GetSystemMetrics(1)
+
+# Размер окна браузера
+$winW = 1400
+$winH = 900
+
+# Позиция по центру
+$x = [Math]::Max(0, ($screenW - $winW) / 2)
+$y = [Math]::Max(0, ($screenH - $winH) / 2)
+
+Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -like "*chromium*"} | ForEach-Object {
+    if ($_.MainWindowHandle -ne 0) {
+        [Win32Center]::MoveWindow($_.MainWindowHandle, [int]$x, [int]$y, $winW, $winH, $true)
+        [Win32Center]::SetForegroundWindow($_.MainWindowHandle)
+    }
+}
+'''
+            subprocess.run(['powershell', '-Command', ps_script], 
+                         capture_output=True, timeout=10)
+        except:
+            pass
     
     def _hide_browser_window(self):
         """Скрывает окно браузера через PowerShell"""
