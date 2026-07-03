@@ -12,7 +12,7 @@ cd clickup-brain-cli
 # 2. Установи (Windows)
 install.bat
 
-# 3. Авторизуйся (один раз)
+# 3. Авторизуйся (один раз, браузер видимый)
 python clickup_capture.py
 
 # 4. Перезапусти терминал, затем запускай:
@@ -100,10 +100,10 @@ pip install playwright rich prompt_toolkit requests
 # Браузер
 python -m playwright install chromium
 
-# Авторизация
+# Авторизация (один раз, браузер видимый)
 python clickup_capture.py
 
-# Запуск
+# Запуск агента (браузер невидимый)
 python clickup_agent.py
 ```
 
@@ -111,9 +111,11 @@ python clickup_agent.py
 
 ```
 clickup-brain-cli/
-├── clickup_agent.py        # Основной агент (headless)
-├── clickup_capture.py      # Авторизация (один раз)
-├── clickup_agent.bat       # Launcher для Windows
+├── clickup_agent.py        # Основной агент (headless=True)
+├── clickup_capture.py      # Авторизация (headless=False, один раз)
+├── clickup_cli.py          # Старая версия (видимый браузер) - НЕ используй
+├── clickup-agent.bat       # Launcher для Windows
+├── braincli-global.bat     # Глобальная команда (если braincli не работает)
 ├── install.bat             # Установщик
 ├── setup.py                # Python package
 ├── browser_profile/        # Сессия браузера (невидимый)
@@ -121,19 +123,41 @@ clickup-brain-cli/
 └── .cli_history            # История команд
 ```
 
-## ⚠️ Проблемы
+## ⚠️ Важно: Браузер открывается видимый?
 
-### Браузер открывается (не headless)
-Ты запустил **старую** `clickup_cli.py` вместо новой `clickup_agent.py`:
+**Причина:** Ты запустил старую `clickup_cli.py` вместо новой `clickup_agent.py`.
+
+**Решение:**
+
 ```bash
-# Неправильно (видимый браузер):
+# ❌ Неправильно (видимый браузер):
 python clickup_cli.py
 
-# Правильно (невидимый):
+# ✅ Правильно (невидимый браузер):
 python clickup_agent.py
 # или
 braincli
 ```
+
+**Исключение:** `clickup_capture.py` **должен** открывать видимый браузер — это для авторизации (один раз).
+
+## 🔧 Если `braincli` не работает
+
+Перезапусти терминал после установки (PATH обновится).
+
+Или используй:
+```bash
+# Вариант 1: прямой запуск
+python clickup_agent.py
+
+# Вариант 2: батник
+braincli-global.bat
+
+# Вариант 3: полный путь
+C:\Users\decyp\Desktop\clickup-cli\clickup-agent.bat
+```
+
+## ⚠️ Проблемы
 
 ### Rate limit
 ClickUp ограничивает запросы. Если видишь `Rate limit`, подожди 1-2 минуты.
@@ -144,12 +168,11 @@ ClickUp ограничивает запросы. Если видишь `Rate lim
 python clickup_capture.py
 ```
 
-### Команда `braincli` не работает
-Перезапусти терминал после установки — PATH должен обновиться.
-
-Или используй полный путь:
+### База данных повреждена
 ```bash
-python C:\Users\decyp\Desktop\clickup-cli\clickup_agent.py
+# Удали и начни заново
+del sessions.db
+braincli
 ```
 
 ## 🔐 Авторизация
@@ -159,7 +182,9 @@ python C:\Users\decyp\Desktop\clickup-cli\clickup_agent.py
 python clickup_capture.py
 ```
 
-Откроется браузер — войди в ClickUp и закрой окно. Сессия сохранится в `browser_profile/`.
+Откроется браузер (видимый) — войди в ClickUp и закрой окно. Сессия сохранится в `browser_profile/`.
+
+После этого агент будет работать с **невидимым** браузером.
 
 ## 📊 База данных
 
@@ -178,15 +203,13 @@ messages (id, session_id, role, content, timestamp)
 copy sessions.db sessions.db.backup
 ```
 
-## 🆚 Отличия от clickup_cli.py
+## 🆚 Разница между файлами
 
-| Функция | clickup_cli.py | clickup_agent.py |
-|---------|----------------|------------------|
-| Сессии | ❌ | ✅ |
-| История | Только команды | ✅ Все сообщения |
-| Память | ❌ | ✅ SQLite |
-| Браузер | **Видимый** | **Невидимый** |
-| Назначение | Быстрые вопросы | **Постоянный агент** |
+| Файл | Браузер | Назначение |
+|------|---------|------------|
+| `clickup_agent.py` | **Невидимый** ✅ | Основной агент |
+| `clickup_cli.py` | Видимый ❌ | Старая версия (не используй) |
+| `clickup_capture.py` | Видимый ✅ | Авторизация (один раз) |
 
 ## 🛣 Roadmap
 
