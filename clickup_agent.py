@@ -140,7 +140,7 @@ class ClickUpAgent:
         """Инициализирует браузер с умной логикой авторизации
         
         Args:
-            interactive: True = показать браузер для авторизации, False = скрытый режим
+            interactive: True = показать браузер для авторизации, False = headless (полностью невидимый)
         """
         console.print("[dim]🔗 Инициализация браузера...[/dim]")
         self.playwright = sync_playwright().start()
@@ -148,12 +148,11 @@ class ClickUpAgent:
         # Используем persistent context для сохранения авторизации
         self.ctx = self.playwright.chromium.launch_persistent_context(
             str(PROFILE_DIR),
-            headless=False,  # Всегда видимый для проверки авторизации
+            headless=not interactive,  # headless=True когда не интерактивный режим
             viewport={"width": 1400, "height": 900},
             args=[
                 '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--window-position=-32000,-32000' if not interactive else ''
+                '--no-sandbox'
             ]
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
@@ -167,15 +166,17 @@ class ClickUpAgent:
         is_authorized = self._check_authorization()
         
         if is_authorized:
-            # Авторизован - скрываем браузер
-            console.print("[green]✅ Авторизация сохранена, скрываю браузер...[/green]")
-            self._hide_browser_window()
+            # Авторизован
+            if not interactive:
+                console.print("[green]✅ Авторизация сохранена, браузер в headless режиме[/green]")
+            else:
+                console.print("[green]✅ Авторизация сохранена[/green]")
         else:
             # Не авторизован
             if interactive:
                 console.print("[yellow]⚠️ Требуется авторизация[/yellow]")
                 console.print("[dim]Браузер открыт. Войди в аккаунт ClickUp.[/dim]")
-                console.print("[dim]После авторизации браузер автоматически скроется.[/dim]")
+                console.print("[dim]После авторизации браузер автоматически закроется.[/dim]")
                 
                 # Ждём пока пользователь авторизуется
                 try:
@@ -183,17 +184,20 @@ class ClickUpAgent:
                     console.print("[green]✅ Авторизация успешна![/green]")
                     console.print("[dim]Сохраняю сессию...[/dim]")
                     time.sleep(2)
-                    self._hide_browser_window()
+                    # Закрываем браузер чтобы пользователь перезапустил в обычном режиме
+                    self.close_browser()
+                    console.print("[green]✅ Готово! Теперь запусти без --interactive[/green]")
+                    sys.exit(0)
                 except:
                     console.print("[red]❌ Таймаут авторизации[/red]")
                     self.close_browser()
                     sys.exit(1)
             else:
-                console.print("[red]❌ Требуется авторизация! Запусти в интерактивном режиме.[/red]")
+                console.print("[red]❌ Требуется авторизация! Запусти: python clickup_agent.py --interactive[/red]")
                 self.close_browser()
                 sys.exit(1)
         
-        console.print("[green]✅ Браузер готов (полностью скрытый)[/green]")
+        console.print("[green]✅ Браузер готов[/green]")
     
     def _check_authorization(self):
         """Надёжная проверка авторизации через несколько факторов"""
