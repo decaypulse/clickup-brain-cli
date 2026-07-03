@@ -463,6 +463,137 @@ Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -
         
         console.print("[green]✅ Готово! Перезапусти braincli для входа с новым аккаунтом[/green]")
         console.print("[dim]Запусти: python clickup_agent.py --interactive[/dim]")
+    
+    def swap_account(self):
+        """Свап аккаунтов: logout + interactive auth в одной команде"""
+        console.print("[cyan]🔄 Свап аккаунтов...[/cyan]\n")
+        
+        # Закрываем текущий браузер
+        self.close_browser()
+        
+        # Удаляем профиль
+        import shutil
+        if PROFILE_DIR.exists():
+            shutil.rmtree(PROFILE_DIR)
+            console.print("[green]✅ Старый профиль удалён[/green]")
+        
+        console.print("\n[cyan]🔐 Запуск интерактивной авторизации...[/cyan]\n")
+        
+        # Запускаем интерактивную авторизацию
+        self.init_browser(interactive=True)
+        
+        # Открываем чат
+        if self.open_chat():
+            console.print("[green]✅ Свап аккаунтов завершён![/green]\n")
+        else:
+            console.print("[red]❌ Ошибка открытия чата[/red]\n")
+    
+    def setup_mcp(self, mcp_url=None):
+        """Автоматически настраивает MCP сервер в ClickUp Brain
+        
+        Args:
+            mcp_url: URL MCP сервера (если None, использует дефолтный из serveo)
+        """
+        if not mcp_url:
+            # Дефолтный URL из serveo туннеля
+            mcp_url = "https://4e46efbf263a6207-185-176-158-3.serveousercontent.com/sse"
+        
+        console.print(f"\n[cyan]🔧 Настройка MCP сервера...[/cyan]")
+        console.print(f"[dim]URL: {mcp_url}[/dim]\n")
+        
+        try:
+            # 1. Переходим на страницу APPS
+            console.print("[dim]1. Открываю APPS...[/dim]")
+            # Ищем кнопку APPS в боковой панели
+            apps_btn = self.page.query_selector('button:has-text("APPS"), [data-test="apps-button"]')
+            if apps_btn:
+                apps_btn.click()
+                time.sleep(2)
+            else:
+                console.print("[yellow]⚠️ Кнопка APPS не найдена, пробую через URL[/yellow]")
+                self.page.goto(f"{BASE_URL}/apps", wait_until="domcontentloaded", timeout=60000)
+                time.sleep(2)
+            
+            # 2. Кликаем на MCP Servers
+            console.print("[dim]2. Открываю MCP Servers...[/dim]")
+            mcp_servers = self.page.query_selector('text=MCP Servers, [data-test="mcp-servers"]')
+            if mcp_servers:
+                mcp_servers.click()
+                time.sleep(2)
+            else:
+                console.print("[yellow]⚠️ Кнопка MCP Servers не найдена[/yellow]")
+                return False
+            
+            # 3. Кликаем на ADD Custom MCP Server
+            console.print("[dim]3. Добавляю Custom MCP Server...[/dim]")
+            add_btn = self.page.query_selector('button:has-text("ADD Custom MCP Server"), [data-test="add-mcp-server"]')
+            if add_btn:
+                add_btn.click()
+                time.sleep(2)
+            else:
+                console.print("[yellow]⚠️ Кнопка ADD не найдена[/yellow]")
+                return False
+            
+            # 4. Кликаем Next (первый раз)
+            console.print("[dim]4. Заполняю форму...[/dim]")
+            next_btn = self.page.query_selector('button:has-text("Next"), [data-test="next-button"]')
+            if next_btn:
+                next_btn.click()
+                time.sleep(1)
+            
+            # 5. Заполняем поля
+            # Name
+            name_field = self.page.query_selector('input[name="name"], input[placeholder*="name" i]')
+            if name_field:
+                name_field.fill("Hermes MCP Server")
+            
+            # Description
+            desc_field = self.page.query_selector('textarea[name="description"], input[name="description"]')
+            if desc_field:
+                desc_field.fill("Provides filesystem access to user files")
+            
+            # URL
+            url_field = self.page.query_selector('input[name="url"], input[placeholder*="url" i], input[type="url"]')
+            if url_field:
+                url_field.fill(mcp_url)
+            
+            # 6. Кликаем Next (второй раз)
+            console.print("[dim]5. Подтверждаю настройки...[/dim]")
+            next_btn = self.page.query_selector('button:has-text("Next"), [data-test="next-button"]')
+            if next_btn:
+                next_btn.click()
+                time.sleep(2)
+            
+            # 7. Кликаем Finish/Done
+            finish_btn = self.page.query_selector('button:has-text("Finish"), button:has-text("Done"), [data-test="finish-button"]')
+            if finish_btn:
+                finish_btn.click()
+                time.sleep(2)
+            
+            console.print("[green]✅ MCP сервер добавлен![/green]\n")
+            
+            # 8. Возвращаемся в чат и отправляем сообщение
+            console.print("[dim]6. Отправляю сообщение в чат...[/dim]")
+            self.open_chat()
+            
+            message = f"Я подключил Custom MCP по ссылке {mcp_url} Теперь работаем только через этот MCP в моих папках"
+            
+            inp = self.find_input()
+            if inp:
+                inp.fill(message)
+                time.sleep(0.5)
+                inp.press("Enter")
+                time.sleep(3)
+                console.print("[green]✅ Сообщение отправлено![/green]\n")
+            else:
+                console.print("[yellow]⚠️ Не удалось найти поле ввода[/yellow]")
+            
+            return True
+            
+        except Exception as e:
+            console.print(f"[red]❌ Ошибка настройки MCP: {e}[/red]")
+            console.print("[yellow]Попробуй настроить вручную через сайт[/yellow]")
+            return False
 
 
 def show_help():
@@ -480,6 +611,8 @@ def show_help():
 | `/history` | История текущей сессии |
 | `/clear` | Очистить экран |
 | `/logout` | Выйти из аккаунта (сменить пользователя) |
+| `/swap` | Свап аккаунтов (logout + авторизация в одной команде) |
+| `/setupmcp [url]` | Автоматически настроить MCP сервер |
 | `/exit` | Выход |
 
 ## Быстрые команды
@@ -506,6 +639,24 @@ def show_help():
 │ 2   │ Python API   │ e5f6g7h8           │
 └─────┴──────────────┴────────────────────┘
 Выберите номер (1-2): 1
+
+❯ /swap
+🔄 Свап аккаунтов...
+✅ Старый профиль удалён
+🔐 Запуск интерактивной авторизации...
+✅ Свап аккаунтов завершён!
+
+❯ /setupmcp
+🔧 Настройка MCP сервера...
+URL: https://4e46efbf263a6207-185-176-158-3.serveousercontent.com/sse
+1. Открываю APPS...
+2. Открываю MCP Servers...
+3. Добавляю Custom MCP Server...
+4. Заполняю форму...
+5. Подтверждаю настройки...
+✅ MCP сервер добавлен!
+6. Отправляю сообщение в чат...
+✅ Сообщение отправлено!
 
 ❯ /logout
 🔄 Выход из аккаунта...
@@ -652,6 +803,17 @@ def main():
                     elif cmd in ['/logout', '/signout']:
                         agent.logout()
                         break
+                    
+                    elif cmd in ['/swap']:
+                        agent.swap_account()
+                        continue
+                    
+                    elif cmd.startswith('/setupmcp'):
+                        # Проверяем есть ли URL в команде
+                        parts = user_input.split(maxsplit=1)
+                        mcp_url = parts[1] if len(parts) > 1 else None
+                        agent.setup_mcp(mcp_url)
+                        continue
                     
                     # Обычное сообщение
                     console.print()
