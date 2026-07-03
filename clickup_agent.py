@@ -230,22 +230,39 @@ class ClickUpAgent:
         global BASE_URL
         current_url = self.page.url
         
-        # Извлекаем workspace ID из URL (формат: app.clickup.com/WORKSPACE_ID/...)
+        # Извлекаем workspace/team ID из URL
+        # Форматы: app.clickup.com/WORKSPACE_ID/... или app.clickup.com/t/TEAM_ID/...
         import re
+        
+        # Пробуем числовой workspace ID: app.clickup.com/90121869092/...
         match = re.search(r'app\.clickup\.com/(\d+)', current_url)
         if match:
             workspace_id = match.group(1)
             BASE_URL = f"https://app.clickup.com/{workspace_id}/ai/brain"
             console.print(f"[dim]✓ Workspace: {workspace_id}[/dim]")
-        else:
-            # Если не нашли ID, пробуем навигировать на /ai/brain через текущий URL
-            if "app.clickup.com" in current_url:
-                # Берём базу URL до первого /ai/ или /settings/
-                base = current_url.split('/ai/')[0].split('/settings/')[0].split('/dashboard')[0]
-                if '/t/' in base:
-                    base = base.split('/t/')[0]
+            return
+        
+        # Пробуем team ID: app.clickup.com/t/TEAM_ID/...
+        match = re.search(r'app\.clickup\.com/t/([^/]+)', current_url)
+        if match:
+            team_id = match.group(1)
+            BASE_URL = f"https://app.clickup.com/t/{team_id}/ai/brain"
+            console.print(f"[dim]✓ Team: {team_id}[/dim]")
+            return
+        
+        # Fallback: берём всё до app.clickup.com и добавляем /ai/brain
+        if "app.clickup.com" in current_url:
+            # Берём базовый путь — всё между доменом и следующим сегментом
+            match = re.search(r'(https://app\.clickup\.com/[^/]+)', current_url)
+            if match:
+                base = match.group(1)
                 BASE_URL = base + "/ai/brain"
-                console.print(f"[dim]✓ URL brain: {BASE_URL[:60]}[/dim]")
+                console.print(f"[dim]✓ URL brain: {BASE_URL[:80]}[/dim]")
+                return
+        
+        # Последний fallback — просто app.clickup.com/ai/brain
+        BASE_URL = "https://app.clickup.com/ai/brain"
+        console.print(f"[dim]✓ URL brain (fallback): {BASE_URL}[/dim]")
     
     def _navigate_to_brain(self):
         """Навигирует к AI Brain через UI, а не через хардкод URL"""
@@ -507,8 +524,21 @@ Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -
         # Запоминаем предыдущий ответ
         prev_response = self.extract_response()
         
+        # Пытаемся закрыть/свернуть мешающие элементы (settings bar, фильтры)
+        try:
+            self.page.evaluate("""() => {
+                const bars = document.querySelectorAll('.views-settings-bar, .view-filter-search__toggle-container');
+                bars.forEach(bar => {
+                    bar.style.display = 'none';
+                });
+            }""")
+        except:
+            pass
+        
         # Отправляем
-        inp.click()
+        inp.scroll_into_view_if_needed()
+        time.sleep(0.3)
+        inp.click(force=True)
         time.sleep(0.5)
         self.page.keyboard.press("Control+a")
         self.page.keyboard.press("Backspace")
