@@ -137,25 +137,25 @@ class ClickUpAgent:
         self.playwright = None
     
     def init_browser(self):
-        """Инициализирует минимизированный браузер (почти невидимый)"""
+        """Инициализирует браузер за пределами экрана (полностью невидимый)"""
         if not PROFILE_DIR.exists():
             console.print("[red]❌ browser_profile не найден! Запусти clickup_capture.py[/red]")
             sys.exit(1)
         
-        console.print("[dim]🔗 Инициализация браузера (минимизированный)...[/dim]")
+        console.print("[dim]🔗 Инициализация браузера (невидимый режим)...[/dim]")
         self.playwright = sync_playwright().start()
         self.ctx = self.playwright.chromium.launch_persistent_context(
             str(PROFILE_DIR),
-            headless=False,  # Видимый, но минимизированный
+            headless=False,  # Видимый (чтобы не детектился)
             viewport={"width": 1400, "height": 900},
             args=[
-                '--start-minimized',
+                '--window-position=-32000,-32000',  # За пределами экрана!
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox'
             ]
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
-        console.print("[green]✅ Браузер инициализирован (минимизированный)[/green]")
+        console.print("[green]✅ Браузер инициализирован (полностью невидимый)[/green]")
     
     def close_browser(self):
         """Закрывает браузер"""
