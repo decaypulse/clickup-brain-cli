@@ -157,15 +157,17 @@ class ClickUpAgent:
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
         
-        # Проверяем авторизацию
+        # Идём на главную ClickUp — редирект на правильный workspace
         console.print("[dim]🔐 Проверка авторизации...[/dim]")
-        self.page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+        self.page.goto("https://app.clickup.com", wait_until="domcontentloaded", timeout=60000)
         time.sleep(3)
         
         # Многофакторная проверка авторизации
         is_authorized = self._check_authorization()
         
         if is_authorized:
+            # Сохраняем реальный URL workspace
+            self._update_brain_url()
             console.print("[green]✅ Авторизация сохранена, браузер в headless режиме[/green]")
             console.print("[green]✅ Браузер готов[/green]")
             return
@@ -183,7 +185,7 @@ class ClickUpAgent:
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox',
-                '--window-position=260,90'  # Примерно по центру для 1920x1080
+                '--window-position=260,90'
             ]
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
@@ -194,23 +196,24 @@ class ClickUpAgent:
         console.print("[dim]Браузер открыт по центру экрана. Войди в аккаунт ClickUp.[/dim]")
         console.print("[dim]После авторизации браузер автоматически скроется.[/dim]")
         
-        # Ждём пока пользователь авторизуется (до 5 минут)
+        # Идём на главную — пользователь сам зайдёт и будет редирект на его workspace
         try:
-            self.page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+            self.page.goto("https://app.clickup.com", wait_until="domcontentloaded", timeout=60000)
             
             console.print("[dim]Ожидание авторизации (каждые 3 сек проверяю)...[/dim]")
             start = time.time()
             check_count = 0
-            while time.time() - start < 300:  # 5 минут
+            while time.time() - start < 300:
                 time.sleep(3)
                 check_count += 1
                 
-                # Отладка каждые 5 проверок
                 if check_count % 5 == 0:
                     console.print(f"[dim]Проверка #{check_count}: URL = {self.page.url[:80]}[/dim]")
                 
                 if self._check_authorization():
                     console.print("[green]✅ Авторизация успешна! Скрываю браузер...[/green]")
+                    # Сохраняем реальный URL workspace
+                    self._update_brain_url()
                     time.sleep(1)
                     self._hide_browser_window()
                     console.print("[green]✅ Браузер скрыт, продолжаю работу[/green]")
@@ -221,6 +224,57 @@ class ClickUpAgent:
         console.print("[red]❌ Таймаут авторизации![/red]")
         self.close_browser()
         sys.exit(1)
+    
+    def _update_brain_url(self):
+        """Обновляет BASE_URL на реальный URL workspace текущего аккаунта"""
+        global BASE_URL
+        current_url = self.page.url
+        
+        # Извлекаем workspace ID из URL (формат: app.clickup.com/WORKSPACE_ID/...)
+        import re
+        match = re.search(r'app\.clickup\.com/(\d+)', current_url)
+        if match:
+            workspace_id = match.group(1)
+            BASE_URL = f"https://app.clickup.com/{workspace_id}/ai/brain"
+            console.print(f"[dim]✓ Workspace: {workspace_id}[/dim]")
+        else:
+            # Если не нашли ID, пробуем навигировать на /ai/brain через текущий URL
+            if "app.clickup.com" in current_url:
+                # Берём базу URL до первого /ai/ или /settings/
+                base = current_url.split('/ai/')[0].split('/settings/')[0].split('/dashboard')[0]
+                if '/t/' in base:
+                    base = base.split('/t/')[0]
+                BASE_URL = base + "/ai/brain"
+                console.print(f"[dim]✓ URL brain: {BASE_URL[:60]}[/dim]")
+    
+    def _navigate_to_brain(self):
+        """Навигирует к AI Brain через UI, а не через хардкод URL"""
+        try:
+            # Пробуем найти кнопку Brain в sidebar
+            brain_selectors = [
+                'text="Brain"',
+                '[data-test="brain"]',
+                'a[href*="brain"]',
+                'button:has-text("Brain")',
+                '[class*="brain"]',
+            ]
+            
+            for sel in brain_selectors:
+                try:
+                    el = self.page.query_selector(sel)
+                    if el and el.is_visible():
+                        el.click()
+                        time.sleep(2)
+                        return True
+                except:
+                    continue
+            
+            # Если не нашли — идём напрямую
+            self.page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+            return True
+        except Exception as e:
+            console.print(f"[dim]⚠ Ошибка навигации: {e}[/dim]")
+            return False
     
     def _check_authorization(self):
         """Надёжная проверка авторизации через несколько факторов"""
