@@ -968,13 +968,52 @@ def show_command_suggestions(current_input, commands):
 
 
 def custom_input(prompt_text='❯ '):
-    """Кастомный input с автодополнением команд через prompt_toolkit"""
-    session = get_prompt_session()
-    try:
-        return session.prompt(prompt_text)
-    except KeyboardInterrupt:
-        print()
-        raise
+    """Кастомный input с автозаполнением команд — запускается в отдельном потоке
+    чтобы избежать конфликта event loop с Playwright sync API"""
+    import threading
+    
+    result = [None]
+    error = [None]
+    
+    def _run_prompt():
+        try:
+            import asyncio
+            # Создаём новый event loop для этого потока
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            from prompt_toolkit.completion import WordCompleter
+            
+            commands = [
+                '/help', '/newsession', '/new', '/sessions', '/ls', '/load',
+                '/history', '/h', '/clear', '/c', '/logout', '/swap',
+                '/setupmcp', '/exit', '/quit', '/q'
+            ]
+            
+            completer = WordCompleter(commands, sentence=True)
+            history = FileHistory(str(HISTORY_FILE))
+            
+            session = PromptSession(
+                completer=completer,
+                history=history,
+                auto_suggest=AutoSuggestFromHistory()
+            )
+            
+            result[0] = session.prompt(prompt_text)
+            loop.close()
+        except Exception as e:
+            error[0] = e
+    
+    t = threading.Thread(target=_run_prompt)
+    t.start()
+    t.join()
+    
+    if error[0]:
+        if isinstance(error[0], KeyboardInterrupt):
+            raise KeyboardInterrupt
+        raise error[0]
+    
+    return result[0] or ''
 
 
 def interactive_session_select(agent):
