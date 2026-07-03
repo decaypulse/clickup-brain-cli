@@ -378,23 +378,45 @@ Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -
         return True
     
     def find_input(self):
-        """Ищет поле ввода"""
+        """Ищет поле ввода в ClickUp Brain"""
+        # Пробуем разные селекторы, которые может использовать ClickUp
         selectors = [
+            'textarea[placeholder*="message" i]',
+            'textarea[placeholder*="Message" i]',
+            'textarea',
+            'input[type="text"]',
+            '[role="textbox"]',
+            '[contenteditable="true"]',
             '.ql-editor[contenteditable="true"]',
             'div.ql-editor',
-            '[contenteditable="true"]',
+            'div[contenteditable="true"]',
+            # Более общие селекторы
+            'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])',
         ]
         
-        for _ in range(20):
+        # Делаем скриншот для дебага
+        debug_screenshot = Path(__file__).parent / "debug_input.png"
+        
+        for attempt in range(30):
             for sel in selectors:
                 try:
                     els = self.page.query_selector_all(sel)
                     for el in els:
                         if el.is_visible():
                             return el
-                except:
+                except Exception:
                     continue
+            
+            if attempt == 5:
+                # Сохраняем скриншот для дебага
+                try:
+                    self.page.screenshot(path=str(debug_screenshot))
+                    console.print(f"[dim]📸 Скриншот для дебага: {debug_screenshot}[/dim]")
+                except Exception:
+                    pass
+            
             time.sleep(1)
+        
         return None
     
     def extract_response(self):
@@ -900,8 +922,29 @@ URL: https://4e46efbf263a6207-185-176-158-3.serveousercontent.com/sse
     console.print(Markdown(help_text))
 
 
+def get_prompt_session():
+    """Создаёт prompt_toolkit сессию с автозаполнением команд"""
+    from prompt_toolkit.completion import WordCompleter
+    from prompt_toolkit.history import FileHistory
+    
+    commands = [
+        '/help', '/newsession', '/new', '/sessions', '/ls', '/load', 
+        '/history', '/h', '/clear', '/c', '/logout', '/swap', 
+        '/setupmcp', '/exit', '/quit', '/q'
+    ]
+    
+    completer = WordCompleter(commands, sentence=True)
+    history = FileHistory(str(HISTORY_FILE))
+    
+    return PromptSession(
+        completer=completer,
+        history=history,
+        auto_suggest=AutoSuggestFromHistory()
+    )
+
+
 def show_command_suggestions(current_input, commands):
-    """Показывает подсказки команд под строкой ввода"""
+    """Показывает подсказки команд (используется только для отладки)"""
     if not current_input.startswith('/'):
         return
     
@@ -925,94 +968,10 @@ def show_command_suggestions(current_input, commands):
 
 
 def custom_input(prompt_text='❯ '):
-    """Кастомный input с автодополнением команд"""
-    commands = ['/help', '/newsession', '/new', '/sessions', '/ls', '/load', 
-                '/history', '/h', '/clear', '/c', '/logout', '/swap', 
-                '/setupmcp', '/exit', '/quit', '/q']
-    
-    current_input = ''
-    cursor_pos = 0
-    suggestion_idx = -1
-    filtered_commands = []
-    
-    print(prompt_text, end='', flush=True)
-    
+    """Кастомный input с автодополнением команд через prompt_toolkit"""
+    session = get_prompt_session()
     try:
-        import msvcrt
-        
-        while True:
-            # Читаем клавишу
-            key = msvcrt.getch()
-            
-            if key == b'\xe0':  # Специальная клавиша (стрелки)
-                key2 = msvcrt.getch()
-                
-                if key2 == b'H':  # Стрелка вверх
-                    if filtered_commands:
-                        suggestion_idx = max(0, suggestion_idx - 1)
-                        # Обновляем ввод
-                        current_input = filtered_commands[suggestion_idx]
-                        print('\r' + prompt_text + current_input + '\033[K', end='', flush=True)
-                
-                elif key2 == b'P':  # Стрелка вниз
-                    if filtered_commands:
-                        suggestion_idx = min(len(filtered_commands) - 1, suggestion_idx + 1)
-                        # Обновляем ввод
-                        current_input = filtered_commands[suggestion_idx]
-                        print('\r' + prompt_text + current_input + '\033[K', end='', flush=True)
-                
-                elif key2 == b'M':  # Стрелка вправо
-                    if cursor_pos < len(current_input):
-                        cursor_pos += 1
-                        print('\033[1C', end='', flush=True)
-                
-                elif key2 == b'K':  # Стрелка влево
-                    if cursor_pos > 0:
-                        cursor_pos -= 1
-                        print('\033[1D', end='', flush=True)
-            
-            elif key == b'\r' or key == b'\n':  # Enter
-                print()  # Переход на новую строку
-                return current_input
-            
-            elif key == b'\t':  # Tab - автодополнение
-                if filtered_commands:
-                    if suggestion_idx == -1:
-                        suggestion_idx = 0
-                    current_input = filtered_commands[suggestion_idx]
-                    print('\r' + prompt_text + current_input + '\033[K', end='', flush=True)
-            
-            elif key == b'\x08':  # Backspace
-                if current_input and cursor_pos > 0:
-                    current_input = current_input[:cursor_pos-1] + current_input[cursor_pos:]
-                    cursor_pos -= 1
-                    print('\r' + prompt_text + current_input + '\033[K', end='', flush=True)
-                    # Перемещаем курсор в правильную позицию
-                    if cursor_pos < len(current_input):
-                        print(f'\033[{len(current_input) - cursor_pos}D', end='', flush=True)
-            
-            elif key == b'\x1b':  # Esc
-                print()
-                return ''
-            
-            elif key == b'\x03':  # Ctrl+C
-                raise KeyboardInterrupt
-            
-            elif 32 <= key[0] < 127:  # Печатаемые символы
-                char = key.decode('utf-8')
-                current_input = current_input[:cursor_pos] + char + current_input[cursor_pos:]
-                cursor_pos += 1
-                print('\r' + prompt_text + current_input + '\033[K', end='', flush=True)
-                # Перемещаем курсор в правильную позицию
-                if cursor_pos < len(current_input):
-                    print(f'\033[{len(current_input) - cursor_pos}D', end='', flush=True)
-            
-            # Обновляем подсказки
-            if current_input.startswith('/'):
-                filtered_commands = [cmd for cmd in commands if cmd.startswith(current_input.lower())]
-                if filtered_commands and len(filtered_commands) <= 5:
-                    show_command_suggestions(current_input, commands)
-    
+        return session.prompt(prompt_text)
     except KeyboardInterrupt:
         print()
         raise
