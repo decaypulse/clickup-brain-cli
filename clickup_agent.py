@@ -136,49 +136,81 @@ class ClickUpAgent:
         self.ctx = None
         self.playwright = None
     
-    def init_browser(self):
-        """Инициализирует браузер (скрытие через PowerShell wrapper)"""
-        if not PROFILE_DIR.exists():
-            console.print("[red]❌ browser_profile не найден! Запусти clickup_capture.py[/red]")
-            sys.exit(1)
+    def init_browser(self, interactive=False):
+        """Инициализирует браузер с умной логикой авторизации
         
-        console.print("[dim]🔗 Инициализация браузера (полностью скрытый)...[/dim]")
+        Args:
+            interactive: True = показать браузер для авторизации, False = скрытый режим
+        """
+        console.print("[dim]🔗 Инициализация браузера...[/dim]")
         self.playwright = sync_playwright().start()
+        
+        # Используем persistent context для сохранения авторизации
         self.ctx = self.playwright.chromium.launch_persistent_context(
             str(PROFILE_DIR),
-            headless=False,
+            headless=False,  # Всегда видимый для проверки авторизации
             viewport={"width": 1400, "height": 900},
             args=[
-                '--window-position=-32000,-32000',
                 '--disable-blink-features=AutomationControlled',
-                '--no-sandbox'
+                '--no-sandbox',
+                '--window-position=-32000,-32000' if not interactive else ''
             ]
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
         
-        # Ждём и скрываем окно через PowerShell
+        # Проверяем авторизацию
+        console.print("[dim]🔐 Проверка авторизации...[/dim]")
+        self.page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+        time.sleep(3)
+        
+        is_authorized = "/login" not in self.page.url
+        
+        if is_authorized:
+            # Авторизован - скрываем браузер
+            console.print("[green]✅ Авторизация сохранена, скрываю браузер...[/green]")
+            self._hide_browser_window()
+        else:
+            # Не авторизован
+            if interactive:
+                console.print("[yellow]⚠️ Требуется авторизация[/yellow]")
+                console.print("[dim]Браузер открыт. Войди в аккаунт ClickUp.[/dim]")
+                console.print("[dim]После авторизации браузер автоматически скроется.[/dim]")
+                
+                # Ждём пока пользователь авторизуется
+                try:
+                    self.page.wait_for_url(lambda url: "/login" not in url, timeout=300000)  # 5 минут
+                    console.print("[green]✅ Авторизация успешна![/green]")
+                    console.print("[dim]Сохраняю сессию...[/dim]")
+                    time.sleep(2)
+                    self._hide_browser_window()
+                except:
+                    console.print("[red]❌ Таймаут авторизации[/red]")
+                    self.close_browser()
+                    sys.exit(1)
+            else:
+                console.print("[red]❌ Требуется авторизация! Запусти в интерактивном режиме.[/red]")
+                self.close_browser()
+                sys.exit(1)
+        
+        console.print("[green]✅ Браузер готов (полностью скрытый)[/green]")
+    
+    def _hide_browser_window(self):
+        """Скрывает окно браузера через PowerShell"""
         try:
             import subprocess
-            import time
-            time.sleep(2)  # Ждём пока окно появится
+            time.sleep(1)
             
-            # PowerShell скрипт для скрытия всех Chrome окон
             ps_script = '''
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public class Win32 {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 }
 "@
-$procs = Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -like "*chromium*"}
-foreach ($proc in $procs) {
-    $proc.MainWindowHandle | ForEach-Object {
-        if ($_ -ne 0) {
-            [Win32]::ShowWindow($_, 0) | Out-Null
-        }
+Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -like "*chromium*"} | ForEach-Object {
+    if ($_.MainWindowHandle -ne 0) {
+        [Win32]::ShowWindow($_.MainWindowHandle, 0)
     }
 }
 '''
@@ -186,8 +218,6 @@ foreach ($proc in $procs) {
                          capture_output=True, timeout=5)
         except:
             pass
-        
-        console.print("[green]✅ Браузер инициализирован (полностью скрытый)[/green]")
     
     def close_browser(self):
         """Закрывает браузер"""
@@ -380,6 +410,22 @@ foreach ($proc in $procs) {
             self.db.update_session_title(self.current_session_id, user_input[:50])
         
         return response
+    
+    def logout(self):
+        """Выходит из аккаунта и очищает профиль браузера"""
+        console.print("[yellow]🔄 Выход из аккаунта...[/yellow]")
+        
+        # Закрываем браузер
+        self.close_browser()
+        
+        # Удаляем профиль браузера
+        import shutil
+        if PROFILE_DIR.exists():
+            shutil.rmtree(PROFILE_DIR)
+            console.print("[green]✅ Профиль браузера удалён[/green]")
+        
+        console.print("[green]✅ Готово! Перезапусти braincli для входа с новым аккаунтом[/green]")
+        console.print("[dim]Запусти: python clickup_agent.py --interactive[/dim]")
 
 
 def show_help():
@@ -396,6 +442,7 @@ def show_help():
 | `/load <id>` | Загрузить сессию по ID |
 | `/history` | История текущей сессии |
 | `/clear` | Очистить экран |
+| `/logout` | Выйти из аккаунта (сменить пользователя) |
 | `/exit` | Выход |
 
 ## Быстрые команды
@@ -422,6 +469,10 @@ def show_help():
 │ 2   │ Python API   │ e5f6g7h8           │
 └─────┴──────────────┴────────────────────┘
 Выберите номер (1-2): 1
+
+❯ /logout
+🔄 Выход из аккаунта...
+✅ Готово! Перезапусти braincli для входа с новым аккаунтом
 
 ❯ /exit
 ```
@@ -476,6 +527,7 @@ def main():
     parser.add_argument("message", nargs="*", help="Сообщение")
     parser.add_argument("--session", help="Загрузить сессию по ID")
     parser.add_argument("--new", action="store_true", help="Новая сессия")
+    parser.add_argument("--interactive", action="store_true", help="Показать браузер для авторизации")
     args = parser.parse_args()
     
     # Заголовок
@@ -491,16 +543,12 @@ def main():
     agent = ClickUpAgent()
     
     try:
-        # Инициализация
-        agent.init_browser()
+        # Инициализация с умной логикой авторизации
+        agent.init_browser(interactive=args.interactive)
         
-        # Открываем чат
-        console.print("[dim]🔗 Подключение к AI Brain...[/dim]")
-        if not agent.open_chat():
-            console.print("[red]❌ Сессия истекла! Запусти clickup_capture.py[/red]")
-            sys.exit(1)
-        
-        console.print("[green]✅ Подключено к AI Brain[/green]\n")
+        # Открываем чат (если ещё не открыт в init_browser)
+        if "/login" not in agent.page.url:
+            console.print("[green]✅ Подключено к AI Brain[/green]\n")
         
         # Загружаем сессию если указана
         if args.session:
@@ -563,6 +611,10 @@ def main():
                         else:
                             console.print("[yellow]Нет активной сессии[/yellow]")
                         continue
+                    
+                    elif cmd in ['/logout', '/signout']:
+                        agent.logout()
+                        break
                     
                     # Обычное сообщение
                     console.print()
