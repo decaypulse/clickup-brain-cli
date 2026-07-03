@@ -668,46 +668,196 @@ URL: https://4e46efbf263a6207-185-176-158-3.serveousercontent.com/sse
     console.print(Markdown(help_text))
 
 
+def show_command_suggestions(current_input, commands):
+    """Показывает подсказки команд под строкой ввода"""
+    if not current_input.startswith('/'):
+        return
+    
+    # Фильтруем команды по введённому тексту
+    filtered = [cmd for cmd in commands if cmd.startswith(current_input.lower())]
+    
+    if filtered:
+        # Сохраняем текущую позицию курсора
+        print('\033[s', end='', flush=True)
+        
+        # Перемещаемся на строку ниже
+        print('\033[1E', end='', flush=True)
+        print('\033[2K', end='', flush=True)  # Очищаем строку
+        
+        # Показываем подсказки
+        suggestions = '  '.join([f'\033[36m{cmd}\033[0m' for cmd in filtered[:5]])
+        print(suggestions, end='', flush=True)
+        
+        # Возвращаемся на исходную позицию
+        print('\033[u', end='', flush=True)
+
+
+def custom_input(prompt_text='❯ '):
+    """Кастомный input с автодополнением команд"""
+    commands = ['/help', '/newsession', '/new', '/sessions', '/ls', '/load', 
+                '/history', '/h', '/clear', '/c', '/logout', '/swap', 
+                '/setupmcp', '/exit', '/quit', '/q']
+    
+    current_input = ''
+    cursor_pos = 0
+    suggestion_idx = -1
+    filtered_commands = []
+    
+    print(prompt_text, end='', flush=True)
+    
+    try:
+        import msvcrt
+        
+        while True:
+            # Читаем клавишу
+            key = msvcrt.getch()
+            
+            if key == b'\xe0':  # Специальная клавиша (стрелки)
+                key2 = msvcrt.getch()
+                
+                if key2 == b'H':  # Стрелка вверх
+                    if filtered_commands:
+                        suggestion_idx = max(0, suggestion_idx - 1)
+                        # Обновляем ввод
+                        current_input = filtered_commands[suggestion_idx]
+                        print('\r' + prompt_text + current_input + '\033[K', end='', flush=True)
+                
+                elif key2 == b'P':  # Стрелка вниз
+                    if filtered_commands:
+                        suggestion_idx = min(len(filtered_commands) - 1, suggestion_idx + 1)
+                        # Обновляем ввод
+                        current_input = filtered_commands[suggestion_idx]
+                        print('\r' + prompt_text + current_input + '\033[K', end='', flush=True)
+                
+                elif key2 == b'M':  # Стрелка вправо
+                    if cursor_pos < len(current_input):
+                        cursor_pos += 1
+                        print('\033[1C', end='', flush=True)
+                
+                elif key2 == b'K':  # Стрелка влево
+                    if cursor_pos > 0:
+                        cursor_pos -= 1
+                        print('\033[1D', end='', flush=True)
+            
+            elif key == b'\r' or key == b'\n':  # Enter
+                print()  # Переход на новую строку
+                return current_input
+            
+            elif key == b'\t':  # Tab - автодополнение
+                if filtered_commands:
+                    if suggestion_idx == -1:
+                        suggestion_idx = 0
+                    current_input = filtered_commands[suggestion_idx]
+                    print('\r' + prompt_text + current_input + '\033[K', end='', flush=True)
+            
+            elif key == b'\x08':  # Backspace
+                if current_input and cursor_pos > 0:
+                    current_input = current_input[:cursor_pos-1] + current_input[cursor_pos:]
+                    cursor_pos -= 1
+                    print('\r' + prompt_text + current_input + '\033[K', end='', flush=True)
+                    # Перемещаем курсор в правильную позицию
+                    if cursor_pos < len(current_input):
+                        print(f'\033[{len(current_input) - cursor_pos}D', end='', flush=True)
+            
+            elif key == b'\x1b':  # Esc
+                print()
+                return ''
+            
+            elif key == b'\x03':  # Ctrl+C
+                raise KeyboardInterrupt
+            
+            elif 32 <= key[0] < 127:  # Печатаемые символы
+                char = key.decode('utf-8')
+                current_input = current_input[:cursor_pos] + char + current_input[cursor_pos:]
+                cursor_pos += 1
+                print('\r' + prompt_text + current_input + '\033[K', end='', flush=True)
+                # Перемещаем курсор в правильную позицию
+                if cursor_pos < len(current_input):
+                    print(f'\033[{len(current_input) - cursor_pos}D', end='', flush=True)
+            
+            # Обновляем подсказки
+            if current_input.startswith('/'):
+                filtered_commands = [cmd for cmd in commands if cmd.startswith(current_input.lower())]
+                if filtered_commands and len(filtered_commands) <= 5:
+                    show_command_suggestions(current_input, commands)
+    
+    except KeyboardInterrupt:
+        print()
+        raise
+
+
 def interactive_session_select(agent):
-    """Интерактивный выбор сессии"""
+    """Интерактивный выбор сессии с навигацией стрелками"""
     sessions = agent.db.list_sessions()
     if not sessions:
         console.print("[yellow]Нет сохранённых сессий[/yellow]")
         return None
     
-    table = Table(title="Сессии", box=box.ROUNDED)
-    table.add_column("#", style="cyan", no_wrap=True, justify="right")
-    table.add_column("Название", style="white")
-    table.add_column("ID", style="dim")
-    table.add_column("Обновлена", style="dim")
+    selected_idx = 0
+    visible_count = min(10, len(sessions))  # Показываем максимум 10 сессий
     
-    for i, s in enumerate(sessions, 1):
-        updated = s['updated_at'].split('T')[0]
-        table.add_row(str(i), s['title'], s['id'], updated)
+    # Скрываем курсор
+    print('\033[25l', end='', flush=True)
     
-    console.print(table)
-    console.print()
-    
-    # Интерактивный выбор
-    while True:
-        try:
-            choice = input(f"Выберите номер (1-{len(sessions)}) или /cancel: ").strip()
+    try:
+        while True:
+            # Очищаем экран (сохраняя позицию)
+            print('\033[H\033[2J', end='', flush=True)
             
-            if choice.lower() == '/cancel':
-                console.print("[dim]Отменено[/dim]")
-                return None
+            # Заголовок
+            console.print("\n[bold cyan]📚 Сессии[/bold cyan]")
+            console.print("[dim]Используй ↑↓ для навигации, Enter для выбора, Esc для отмены[/dim]\n")
             
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(sessions):
-                    return sessions[idx]['id']
+            # Отображаем сессии
+            start_idx = max(0, selected_idx - visible_count // 2)
+            end_idx = min(len(sessions), start_idx + visible_count)
+            
+            if start_idx > 0:
+                print("  ↑ ...")
+            
+            for i in range(start_idx, end_idx):
+                s = sessions[i]
+                updated = s['updated_at'].split('T')[0]
+                
+                if i == selected_idx:
+                    # Выделенная сессия
+                    print(f"  \033[36m▶ {s['title']:<30} | {s['id']:<8} | {updated}\033[0m")
                 else:
-                    console.print(f"[red]Введите число от 1 до {len(sessions)}[/red]")
-            except ValueError:
-                console.print("[red]Введите число или /cancel[/red]")
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Отменено[/dim]")
-            return None
+                    print(f"    {s['title']:<30} | {s['id']:<8} | {updated}")
+            
+            if end_idx < len(sessions):
+                print("  ↓ ...")
+            
+            print()
+            
+            # Читаем клавишу
+            import msvcrt
+            key = msvcrt.getch()
+            
+            if key == b'\xe0':  # Специальная клавиша (стрелки)
+                key2 = msvcrt.getch()
+                if key2 == b'H':  # Стрелка вверх
+                    selected_idx = max(0, selected_idx - 1)
+                elif key2 == b'P':  # Стрелка вниз
+                    selected_idx = min(len(sessions) - 1, selected_idx + 1)
+            elif key == b'\r' or key == b'\n':  # Enter
+                # Показываем курсор
+                print('\033[25h', end='', flush=True)
+                console.print(f"\n[green]✅ Выбрана сессия: {sessions[selected_idx]['title']}[/green]\n")
+                return sessions[selected_idx]['id']
+            elif key == b'\x1b':  # Esc
+                # Показываем курсор
+                print('\033[25h', end='', flush=True)
+                console.print("\n[dim]Отменено[/dim]\n")
+                return None
+            elif key == b'\x03':  # Ctrl+C
+                print('\033[25h', end='', flush=True)
+                raise KeyboardInterrupt
+    
+    except KeyboardInterrupt:
+        print('\033[25h', end='', flush=True)
+        console.print("\n[dim]Отменено[/dim]\n")
+        return None
 
 
 def main():
@@ -760,7 +910,7 @@ def main():
             
             while True:
                 try:
-                    user_input = input('❯ ').strip()
+                    user_input = custom_input('❯ ').strip()
                     if not user_input:
                         continue
                     
