@@ -605,8 +605,7 @@ Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -
         except:
             pass
         
-        # Отправляем
-        inp.scroll_into_view_if_needed()
+        # Отправляем - БЕЗ scroll_into_view_if_needed (падает на некоторых страницах)
         time.sleep(0.3)
         inp.click(force=True)
         time.sleep(0.5)
