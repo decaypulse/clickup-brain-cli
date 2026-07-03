@@ -620,17 +620,42 @@ Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -
         last_response = ""
         stable_count = 0
         
-        for _ in range(timeout // 2):
+        # Ждём появления ответа (индикаторы: "Working...", "Reasoning...", или сам текст)
+        console.print("[dim]⏳ Жду ответ от Brain...[/dim]")
+        try:
+            self.page.wait_for_selector('text=/Working|Reasoning|Thinking|Pondering/', timeout=10000)
+            console.print("[dim]✓ Brain начал отвечать...[/dim]")
+        except:
+            console.print("[dim]⚠ Индикатор ответа не найден, продолжаю...[/dim]")
+        
+        # Ждём завершения ответа (исчезновение индикаторов)
+        time.sleep(3)
+        
+        for attempt in range(timeout // 2):
             time.sleep(2)
             
             try:
+                # Проверяем rate limit
                 has_limit = self.page.evaluate("() => document.body.innerText.includes('Rate limit reached')")
                 if has_limit:
                     return "⚠️ Rate limit! Подожди и попробуй снова."
                 
+                # Проверяем что Brain ещё отвечает (есть индикаторы)
+                is_working = self.page.evaluate("""() => {
+                    const body = document.body.innerText;
+                    return body.includes('Working...') || body.includes('Reasoning...') || 
+                           body.includes('Thinking...') || body.includes('Pondering...');
+                }""")
+                
+                if is_working:
+                    console.print(f"[dim]⏳ Brain ещё отвечает (попытка {attempt+1})...[/dim]")
+                    continue
+                
+                # Извлекаем ответ
                 current = self.extract_response()
                 
                 if current and current != prev_response:
+                    console.print(f"[dim]✓ Получен ответ ({len(current)} символов)[/dim]")
                     if current == last_response:
                         stable_count += 1
                         if stable_count >= 2:
@@ -638,7 +663,11 @@ Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -
                     else:
                         stable_count = 0
                         last_response = current
+                else:
+                    console.print(f"[dim]⚠ Ответ пустой или не изменился (попытка {attempt+1})[/dim]")
+                    
             except Exception as e:
+                console.print(f"[dim]⚠ Ошибка: {e}[/dim]")
                 if "crashed" in str(e).lower():
                     time.sleep(2)
                     continue
