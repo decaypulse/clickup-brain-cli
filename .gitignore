@@ -45,3 +45,7 @@ Thumbs.db
 
 # Logs
 *.log
+credentials.json
+session.json
+api_log.json
+*.png
