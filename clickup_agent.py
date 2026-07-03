@@ -228,18 +228,27 @@ class ClickUpAgent:
     def _update_brain_url(self):
         """Обновляет BASE_URL на реальный URL workspace текущего аккаунта"""
         global BASE_URL
+        import re
+        
+        # Ждём полной загрузки страницы
+        time.sleep(2)
         current_url = self.page.url
         
-        # Извлекаем workspace/team ID из URL
-        # Форматы: app.clickup.com/WORKSPACE_ID/... или app.clickup.com/t/TEAM_ID/...
-        import re
+        console.print(f"[dim]🔍 Текущий URL: {current_url}[/dim]")
+        
+        # Сохраняем скриншот для отладки
+        try:
+            self.page.screenshot(path="debug_redirect.png")
+            console.print("[dim]📸 Скриншот сохранён: debug_redirect.png[/dim]")
+        except:
+            pass
         
         # Пробуем числовой workspace ID: app.clickup.com/90121869092/...
         match = re.search(r'app\.clickup\.com/(\d+)', current_url)
         if match:
             workspace_id = match.group(1)
             BASE_URL = f"https://app.clickup.com/{workspace_id}/ai/brain"
-            console.print(f"[dim]✓ Workspace: {workspace_id}[/dim]")
+            console.print(f"[dim]✓ Workspace из URL: {workspace_id}[/dim]")
             return
         
         # Пробуем team ID: app.clickup.com/t/TEAM_ID/...
@@ -247,20 +256,50 @@ class ClickUpAgent:
         if match:
             team_id = match.group(1)
             BASE_URL = f"https://app.clickup.com/t/{team_id}/ai/brain"
-            console.print(f"[dim]✓ Team: {team_id}[/dim]")
+            console.print(f"[dim]✓ Team из URL: {team_id}[/dim]")
             return
         
-        # Fallback: берём всё до app.clickup.com и добавляем /ai/brain
-        if "app.clickup.com" in current_url:
-            # Берём базовый путь — всё между доменом и следующим сегментом
-            match = re.search(r'(https://app\.clickup\.com/[^/]+)', current_url)
-            if match:
-                base = match.group(1)
-                BASE_URL = base + "/ai/brain"
-                console.print(f"[dim]✓ URL brain: {BASE_URL[:80]}[/dim]")
+        # Ищем workspace ID в DOM (data-test, мета-теги, JS переменные)
+        console.print("[dim]🔍 Ищу workspace ID в DOM...[/dim]")
+        try:
+            workspace_id = self.page.evaluate("""() => {
+                // Ищем в data-атрибутах
+                const elements = document.querySelectorAll('[data-workspace-id], [data-team-id]');
+                for (let el of elements) {
+                    const id = el.dataset.workspaceId || el.dataset.teamId;
+                    if (id && /^\\d+$/.test(id)) return id;
+                }
+                
+                // Ищем в мета-тегах
+                const metas = document.querySelectorAll('meta');
+                for (let meta of metas) {
+                    const content = meta.content || '';
+                    if (/^\\d+$/.test(content)) return content;
+                }
+                
+                // Ищем в window переменных
+                if (window.__NUXT__ && window.__NUXT__.state && window.__NUXT__.state.workspace) {
+                    return window.__NUXT__.state.workspace.id;
+                }
+                
+                // Ищем в ссылках
+                const links = document.querySelectorAll('a[href*="app.clickup.com"]');
+                for (let link of links) {
+                    const match = link.href.match(/app\\.clickup\\.com\\/(\\d+)/);
+                    if (match) return match[1];
+                }
+                
+                return null;
+            }""")
+            
+            if workspace_id:
+                BASE_URL = f"https://app.clickup.com/{workspace_id}/ai/brain"
+                console.print(f"[dim]✓ Workspace из DOM: {workspace_id}[/dim]")
                 return
+        except Exception as e:
+            console.print(f"[dim]⚠ Ошибка поиска в DOM: {e}[/dim]")
         
-        # Последний fallback — просто app.clickup.com/ai/brain
+        # Fallback: идём на /ai/brain напрямую
         BASE_URL = "https://app.clickup.com/ai/brain"
         console.print(f"[dim]✓ URL brain (fallback): {BASE_URL}[/dim]")
     
