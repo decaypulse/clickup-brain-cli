@@ -137,25 +137,57 @@ class ClickUpAgent:
         self.playwright = None
     
     def init_browser(self):
-        """Инициализирует браузер за пределами экрана (полностью невидимый)"""
+        """Инициализирует браузер (скрытие через PowerShell wrapper)"""
         if not PROFILE_DIR.exists():
             console.print("[red]❌ browser_profile не найден! Запусти clickup_capture.py[/red]")
             sys.exit(1)
         
-        console.print("[dim]🔗 Инициализация браузера (невидимый режим)...[/dim]")
+        console.print("[dim]🔗 Инициализация браузера (полностью скрытый)...[/dim]")
         self.playwright = sync_playwright().start()
         self.ctx = self.playwright.chromium.launch_persistent_context(
             str(PROFILE_DIR),
-            headless=False,  # Видимый (чтобы не детектился)
+            headless=False,
             viewport={"width": 1400, "height": 900},
             args=[
-                '--window-position=-32000,-32000',  # За пределами экрана!
+                '--window-position=-32000,-32000',
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox'
             ]
         )
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
-        console.print("[green]✅ Браузер инициализирован (полностью невидимый)[/green]")
+        
+        # Ждём и скрываем окно через PowerShell
+        try:
+            import subprocess
+            import time
+            time.sleep(2)  # Ждём пока окно появится
+            
+            # PowerShell скрипт для скрытия всех Chrome окон
+            ps_script = '''
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32 {
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+}
+"@
+$procs = Get-Process | Where-Object {$_.ProcessName -like "*chrome*" -or $_.ProcessName -like "*chromium*"}
+foreach ($proc in $procs) {
+    $proc.MainWindowHandle | ForEach-Object {
+        if ($_ -ne 0) {
+            [Win32]::ShowWindow($_, 0) | Out-Null
+        }
+    }
+}
+'''
+            subprocess.run(['powershell', '-Command', ps_script], 
+                         capture_output=True, timeout=5)
+        except:
+            pass
+        
+        console.print("[green]✅ Браузер инициализирован (полностью скрытый)[/green]")
     
     def close_browser(self):
         """Закрывает браузер"""
